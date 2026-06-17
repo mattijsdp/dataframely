@@ -45,5 +45,48 @@ def s3_tmp_path(s3_server: str, s3_bucket: str, monkeypatch: pytest.MonkeyPatch)
 
 
 @pytest.fixture()
+def s3_isolated(
+    s3_server: str, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[tuple[str, dict[str, str]]]:
+    """A freshly-named bucket that is only reachable via the returned ``storage_options``.
+
+    Polars caches object stores per bucket, and these caches live Rust-side and are not
+    cleared by ``monkeypatch.delenv``. A bucket configured once from ``AWS_*`` env vars
+    (e.g. by :func:`s3_tmp_path`) therefore stays reachable without ``storage_options``,
+    which would let a read silently succeed even if ``storage_options`` was dropped. A
+    unique bucket has no such cached store, so reaching it requires forwarding
+    ``storage_options`` to every read.
+    """
+    for var in (
+        "AWS_ENDPOINT_URL",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_ALLOW_HTTP",
+        "AWS_S3_ALLOW_UNSAFE_RENAME",
+        "AWS_DEFAULT_REGION",
+        "AWS_REGION",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    bucket = f"isolated-{uuid.uuid4()}"
+    client = boto3.client(
+        "s3", endpoint_url=s3_server, aws_access_key_id="", aws_secret_access_key=""
+    )
+    client.create_bucket(Bucket=bucket)
+    yield (
+        f"s3://{bucket}",
+        {
+            "aws_access_key_id": "testing",
+            "aws_secret_access_key": "testing",
+            "aws_endpoint_url": s3_server,
+            "aws_region": "us-east-1",
+            "aws_allow_http": "true",
+        },
+    )
+    for obj in client.list_objects_v2(Bucket=bucket).get("Contents", []):
+        client.delete_object(Bucket=bucket, Key=obj["Key"])
+    client.delete_bucket(Bucket=bucket)
+
+
+@pytest.fixture()
 def any_tmp_path(request: pytest.FixtureRequest) -> str:
     return str(request.getfixturevalue(request.param))

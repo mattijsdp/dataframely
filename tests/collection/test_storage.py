@@ -1,6 +1,7 @@
 # Copyright (c) QuantCo 2025-2026
 # SPDX-License-Identifier: BSD-3-Clause
 
+import uuid
 from typing import Any
 
 import polars as pl
@@ -496,6 +497,29 @@ def test_read_invalid_parquet_metadata_collection(
 
     # Assert
     assert collection is None
+
+
+@pytest.mark.s3
+def test_read_parquet_metadata_collection_uses_storage_options(
+    s3_isolated: tuple[str, dict[str, str]],
+) -> None:
+    """`read_parquet_metadata_collection` must forward `storage_options` to the read."""
+    # Arrange
+    bucket, storage_options = s3_isolated
+    path = f"{bucket}/{uuid.uuid4()}/df.parquet"
+    pl.DataFrame({"a": [1, 2, 3]}).write_parquet(
+        path,
+        metadata={COLLECTION_METADATA_KEY: MyCollection.serialize()},
+        storage_options=storage_options,
+    )
+
+    # Act
+    collection = dy.read_parquet_metadata_collection(
+        path, storage_options=storage_options
+    )
+
+    # Assert
+    assert collection is not None
 
 
 @pytest.mark.parametrize(

@@ -1,6 +1,7 @@
 # Copyright (c) QuantCo 2025-2026
 # SPDX-License-Identifier: BSD-3-Clause
 
+import inspect
 from collections.abc import Iterable
 from typing import Any
 
@@ -53,13 +54,13 @@ class ParquetStorageBackend(StorageBackend):
     def scan_frame(self, **kwargs: Any) -> tuple[pl.LazyFrame, SerializedSchema | None]:
         source = kwargs.pop("source")
         lf = pl.scan_parquet(source, **kwargs)
-        metadata = _read_serialized_schema(source)
+        metadata = _read_serialized_schema(source, **_metadata_read_options(kwargs))
         return lf, metadata
 
     def read_frame(self, **kwargs: Any) -> tuple[pl.DataFrame, SerializedSchema | None]:
         source = kwargs.pop("source")
         df = pl.read_parquet(source, **kwargs)
-        metadata = _read_serialized_schema(source)
+        metadata = _read_serialized_schema(source, **_metadata_read_options(kwargs))
         return df, metadata
 
     # ------------------------------ Collections ---------------------------------------
@@ -147,6 +148,7 @@ class ParquetStorageBackend(StorageBackend):
         # between lazy and eager reads
         data = {}
         collection_types = []
+        metadata_options = _metadata_read_options(kwargs)
 
         fs: AbstractFileSystem = url_to_fs(path)[0]
         for key in members:
@@ -159,12 +161,16 @@ class ParquetStorageBackend(StorageBackend):
                     else pl.read_parquet(scan_path, **kwargs).lazy()
                 )
                 if is_file:
-                    collection_types.append(_read_serialized_collection(source_path))
+                    collection_types.append(
+                        _read_serialized_collection(source_path, **metadata_options)
+                    )
                 else:
                     prefix = get_file_prefix(fs)
                     for file in fs.glob(fs.sep.join([source_path, "**", "*.parquet"])):
                         collection_types.append(
-                            _read_serialized_collection(f"{prefix}{file}")
+                            _read_serialized_collection(
+                                f"{prefix}{file}", **metadata_options
+                            )
                         )
 
         return data, collection_types
@@ -234,7 +240,7 @@ class ParquetStorageBackend(StorageBackend):
         file = kwargs.pop("file")
 
         # Meta data
-        metadata = pl.read_parquet_metadata(file)
+        metadata = pl.read_parquet_metadata(file, **_metadata_read_options(kwargs))
         serialized_schema = assert_failure_info_metadata(
             metadata.get(SCHEMA_METADATA_KEY)
         )
@@ -245,11 +251,22 @@ class ParquetStorageBackend(StorageBackend):
         return lf, serialized_rules, serialized_schema
 
 
-def _read_serialized_collection(path: str) -> SerializedCollection | None:
-    meta = pl.read_parquet_metadata(path)
+_METADATA_READ_PARAMS = frozenset(
+    inspect.signature(pl.read_parquet_metadata).parameters
+) - {"source"}
+
+
+def _metadata_read_options(kwargs: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in kwargs.items() if k in _METADATA_READ_PARAMS}
+
+
+def _read_serialized_collection(
+    path: str, **read_options: Any
+) -> SerializedCollection | None:
+    meta = pl.read_parquet_metadata(path, **read_options)
     return meta.get(COLLECTION_METADATA_KEY)
 
 
-def _read_serialized_schema(path: str) -> SerializedSchema | None:
-    meta = pl.read_parquet_metadata(path)
+def _read_serialized_schema(path: str, **read_options: Any) -> SerializedSchema | None:
+    meta = pl.read_parquet_metadata(path, **read_options)
     return meta.get(SCHEMA_METADATA_KEY)
